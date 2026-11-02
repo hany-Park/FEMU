@@ -1,6 +1,6 @@
 # FEMU 코드 분석 진행 상황 (인수인계용)
 
-작성: 2026-10-22 · 갱신: 2026-10-23 (`ftl.h` 구조체 정리 완료, 5·6절), 2026-11-02 (코드 기준을 9.0.1로 변경, 2절) · 이 문서만 읽어도 지금까지의 진행 상황을 따라올 수 있도록 정리한 것임.
+작성: 2026-10-22 · 갱신: 2026-10-23 (`ftl.h` 구조체 정리 완료, 5·6절), 2026-11-02 (코드 기준을 9.0.1로 변경, 2절 / 9.0.1 재확인과 노션 개편, 5.9·6절 / 로컬·서버 실행 스크립트 분리, 2.1절) · 이 문서만 읽어도 지금까지의 진행 상황을 따라올 수 있도록 정리한 것임.
 
 ## 1. 목적과 작업 방식
 
@@ -17,7 +17,7 @@
 - 브랜치: `ftl-test` = `ad2d9fc71` (2025-07-15, QEMU 9.0.1 기반 FEMU의 마지막 커밋) 위에 문서 커밋만 올린 상태. `master`는 `ad2d9fc71`.
   - 공식 태그 `femu-v9.0.1`(`3690338cf`, 2024-06-20) 이후의 수정 12개가 포함됨: 메모리 누수 수정, BBSSD TRIM 지원, ZNS 수정 등. 바로 다음 upstream 커밋 `eafddfdd0`이 QEMU 10.1.0 업그레이드임.
 - 이전 10.1.0 기준 코드는 GitHub 백업 브랜치에 있음: `backup/master-10.1.0-601ddfe21`, `backup/ftl-test-10.1.0-c78926d58`.
-- 빌드: `build-femu/`는 아직 10.1.0으로 빌드된 상태임. 9.0.1로 실험하려면 다시 빌드해야 함.
+- 빌드: `build-femu/`는 로컬·서버 모두 아직 10.1.0으로 빌드된 상태임. 9.0.1로 실험하려면 다시 빌드해야 함 (2.1절).
 - **9.0.1에서는 BBSSD FTL이 거의 `bbssd/ftl.c` 한 파일(약 1000줄)에 있음.** 처음 claude.ai가 만든 원본 가이드(`FEMU_코드분석_가이드.pdf`, 루트에 있음, 커밋 안 됨)가 이 구조에 더 가까움.
 
 | 파일 (hw/femu/ 기준, 9.0.1) | 내용 |
@@ -29,6 +29,29 @@
 | `femu.c` | 장치 초기화, 옵션 정의 |
 | `nand/`, `timing-model/` | NAND 보조 코드, 타이밍 모델 |
 
+### 2.1 실행 환경: 로컬과 서버 (11/02, Claude Code)
+
+- **브랜치는 환경별로 나누지 않음.** 크기 차이는 코드가 아니라 실행 옵션 차이이기 때문임. 브랜치는 목적별로 둠(`ftl-test` = 분석·노트, 실험으로 코드를 고칠 때만 `exp/<이름>`). 환경 차이는 실행 스크립트로만 둠.
+- `devsz_mb`만큼 호스트 RAM을 데이터 저장 공간으로 잡음 (femu.c:544-546, 옵션 정의 :620). 그래서 큰 장치는 서버에서만 돌릴 수 있음.
+  - 로컬: WSL, RAM 15GB. 서버: `cpslab02`, RAM 251GB, CPU 64개.
+- 실행 스크립트 (`femu-scripts/`, 원본 `run-blackbox.sh`를 복사해서 아래 값만 바꿈):
+
+| 스크립트 | `blks_per_pl` | NAND 전체 | `ssd_size` (OP 25%) | line 수 / 배경 GC 기준 |
+|---|---|---|---|---|
+| `run-blackbox.sh` (원본) | 256 | 16GB | 12288 | 256 / free ≤ 64 |
+| `run-blackbox-local.sh` | 128 | 8GB | 6144 | 128 / free ≤ 32 |
+| `run-blackbox-server.sh` | 1024 | 64GB | 49152 | 1024 / free ≤ 256 |
+
+  - 나머지(지연 값, GC 임계값 75/95, `-m 4G`, `-smp 4`)는 원본과 같음. `IMGDIR`·`OSIMGF`는 환경 변수로 바꿀 수 있게 함. 서버 64GB는 "NAND 전체 크기" 기준으로 정함.
+  - `femu-copy-scripts.sh`의 `CPL` 목록에 두 스크립트를 추가함. `build-femu/`에서 복사 스크립트를 실행한 뒤 환경에 맞는 스크립트를 실행하면 됨 (스크립트가 `./qemu-system-x86_64`를 현재 디렉터리에서 찾음).
+  - **아직 실행해 보지 않음** (`bash -n` 문법 검사만 함).
+- **주의**: geometry가 다르면 line 수(`tt_lines = blks_per_lun`, ftl.c:279)와 GC 임계값(ftl.c:280-282)이 함께 바뀜. 로컬은 동작 확인·디버깅용으로만 쓰고, 발표용 수치는 서버 결과만 씀. VM 안의 워크로드 크기(fio `size` 등)도 장치 크기에 맞춰 비율로 정함.
+- **서버 상태 (11/02 확인)**: 서버 `ftl-test`는 아직 `c78926d58`(10.1.0 계열)이고, `build-femu/`에 10.1.0 전용 스크립트(`run-blackbox-fdp.sh` 등)가 남아 있음. `c78926d58`은 지금 `origin/ftl-test`의 조상이 아니므로 `git pull`로는 맞출 수 없음. 서버에서 할 일:
+  1. `git status`로 커밋 안 한 실험 결과가 있는지 확인하고, 있으면 따로 복사함
+  2. `git fetch origin` → `git reset --hard origin/ftl-test` (`c78926d58`은 GitHub `backup/ftl-test-10.1.0-c78926d58`에 있음)
+  3. `build-femu/`를 지우고 새로 만든 뒤 `femu-copy-scripts.sh` → `femu-compile.sh`
+  - 로컬 `build-femu/`도 같은 방법으로 다시 빌드해야 함.
+
 ## 3. 지금까지의 경과
 
 1. **exp5 실험 (9월, 종료)**: 예전 코드에 직접 넣은 WAF 카운터로 GC 임계값 60~80%를 비교함. 결과는 이미 정리했고 **앞으로 쓰지 않음**. 예전 카운터 코드는 로컬 `backup/ftl-test-stats` 브랜치에만 남아 있음.
@@ -37,6 +60,9 @@
 4. **Codex의 가이드 검토 (10/10)**: `notes/FEMU_코드분석_가이드_검토.md`. 아래 4절의 정정 사항을 지적함.
 5. **Codex와 `ftl.h` 분석 (10/15)**: NAND 계층 구조체까지 진행함 (5절).
 6. **Claude Code와 `ftl.h` 나머지 정리 (10/22~23)**: `ssdparams` 후반부부터 `struct ssd`까지, 그리고 `ssd_init_params()`와 GC 임계값 계산을 정리함 (5절). `struct ppa`는 노션에 따로 정리되어 있음. 노션 반영 현황은 6절 참고.
+7. **코드 기준을 9.0.1로 되돌림 (11/02)**: 10.1.0 계열은 정식 릴리즈가 없고(upstream 태그는 `femu-v9.0.1`이 최신) 코드가 커서, 발표용으로는 9.0.1이 낫다고 판단함 (2절).
+8. **노션을 9.0.1 기준으로 개편 (11/02, Claude Code)**: 10.1 기준 페이지는 백업으로 복제해 두고, 원본을 9.0.1 코드와 대조해 다시 씀. 새로 확인한 내용은 5.9절, 노션 현황은 6절.
+9. **로컬·서버 실행 스크립트 분리 (11/02, Claude Code)**: 서버는 64GB, 로컬은 8GB NAND로 돌리도록 실행 스크립트를 2개로 나눔. 브랜치는 나누지 않음 (2.1절).
 
 ## 4. 가이드에서 바로잡을 점 (Codex 검토, 일부 코드로 재확인함)
 
@@ -50,6 +76,8 @@
 - **bandwidth**: "지연만으로 결정된다"는 말은 너무 단정적임. LUN 병렬성, QD, 요청 크기, 채널·PCIe 모델, `fw_cpu_ns`도 영향을 줌.
 
 ## 5. `ftl.h` 분석 (10/23 완료, `ru_mgmt` 등 FDP 구조체는 제외)
+
+> 5.1~5.8은 10.1.0 계열 기준임. 9.0.1에서 다시 확인한 내용은 **5.9절**에 있고, 둘이 다르면 5.9절이 맞음.
 
 ### 5.1 NAND 계층 (10/15, Codex)
 
@@ -132,26 +160,47 @@
 - `enable_gc_delay`는 여기서 항상 `true`로 시작함 (:304). 호스트 제어 플래그로만 끌 수 있음 (bb.c:270-273).
 - 기본 geometry 값: 8 ch × 8 LUN × 1 pl, 블록당 256 page, plane당 256 블록, 섹터 512B × 8 (femu.c:2985-2997). 따라서 `pgs_per_line = 64 × 256 = 16384`이고, greedy의 회수 기준 `pgs_per_line/8 = 2048`.
 
+### 5.9 9.0.1에서 다시 확인한 것 (11/02, Claude Code)
+
+`ad2d9fc71`의 `ftl.h`·`ftl.c`·`bb.c`·`nvme-io.c`·`nvme-admin.c`를 직접 읽고 확인한 내용. 노션 「코드 정리」·「IO흐름」에 반영함.
+
+- **없어진 것**: FDP, GC 정책 테이블(greedy만 `select_victim_line`에 직접 구현, ftl.c:668-688), 매핑 방식 테이블과 `map_write_plan`(`ssd_write`가 `maptbl`/`rmap`을 직접 고침, ftl.c:829-844), 쓰기 버퍼·읽기 캐시·DFTL 캐시, WAF 카운터, `MAP_IO`, ECC 지연 모델, multi-plane 묶음(`ssd_mp_batch`), `nand_block.read_cnt`. WAF를 재려면 카운터를 직접 넣어야 함.
+- **PPA 비트 폭이 다름**: pl 8, lun 8, ch 7 (ftl.h:48-53). 10.1은 pl 4, lun 7, ch 12.
+- **5.7절 정정**: 9.0.1에서는 `ssd->to_ftl`, `to_poller`, `dataplane_started_ptr`, `ftl_thread`를 **실제로 씀**. FTL 스레드는 `ssd_init()` 끝에서 만들고(ftl.c:390-391), dataplane이 켜질 때까지 기다린 뒤 `n->to_ftl`/`n->to_poller` 포인터를 복사해 씀(ftl.c:953-959). 함수 이름도 `femu_ftl_thread`가 아니라 `ftl_thread`(ftl.c:944).
+- **5.5절 정정**: write pointer는 ch → lun → pg 순으로만 진행함. pl은 올리지 않고 항상 0 (ftl.c:157-209, "assume # of pl_per_lun is 1" 주석 :204).
+- free line이 떨어지면 명령을 거부하지 않고 `abort()` (ftl.c:193-197).
+- **지연은 LUN 시간뿐임**: `ssd_advance_status`는 read/write/erase 모두 `max(stime, lun_avail) + 연산 지연`이고(ftl.c:456-525), 채널 계산은 `#if 0`이라 `next_ch_avail_time`·`ch_xfer_lat`은 지연에 반영되지 않음. `nand_cmd.type`은 쓰기 분기에서 if/else가 같은 계산이라 결과에 영향 없음 (ftl.c:490-494). PCIe·펌웨어 CPU 지연 모델도 없음.
+- 쓰이지 않거나 기록만 하는 필드: `nand_block.erase_cnt`(증가만, ftl.c:614), `nand_block.wp`, `nand_page.sec`/`nsecs`(초기화와 assert만), LUN·채널 `busy`, LUN `gc_endtime`(기록만, ftl.c:663, 760), 채널 `gc_endtime`(`#if 0` 안).
+- `line_mgmt`에 `victim_line_cnt`가 있음 (ftl.c:188, 571, 684). victim 큐 우선순위는 `vpc`, 작은 값이 먼저 (ftl.c:59-67).
+- GC 임계값 계산은 10.1과 같음: 64 / 12 line (ftl.c:279-282, 기본값 femu.c:682-683). 강제 GC는 `ssd_write` 시작 지점에서만 검사함 (ftl.c:822-827, 10.1처럼 페이지별 루프 검사는 없음). 배경 GC는 요청을 `to_poller`에 넣은 뒤 한 번 (ftl.c:998-1000).
+- GC는 valid 페이지를 호스트 쓰기와 같은 write pointer로 옮기고(ftl.c:630-666), old 페이지는 하나씩 invalid 처리하지 않고 블록 전체를 `mark_block_free`로 비움 (ftl.c:750).
+- **`ftl_thread`의 `lat`은 루프 밖에서 한 번만 0으로 초기화됨** (ftl.c:949). WRITE/READ/DSM이 아닌 명령(FLUSH 등)은 `lat`을 새로 정하지 않아서 직전 요청의 지연을 그대로 씀 (ftl.c:972-989).
+- `FEMU_RESET_ACCT`는 카운터를 먼저 0으로 만든 뒤 출력하므로 로그에는 항상 0/0이 찍힘 (bb.c:55-58).
+- I/O 경로 (9.0.1): SQ에서 꺼냄 → `stime` 기록 (nvme-io.c:69) → `nvme_io_cmd` (:502) → READ/WRITE는 `bb_io_cmd` (bb.c:79) → `nvme_rw` (:251) → `backend_rw` (:288), DSM은 `nvme_dsm` (:296) → `to_ftl` (:81) → `ftl_thread` 분기 (ftl.c:972) → `expire_time += lat` (ftl.c:990) → `to_poller` (ftl.c:992) → 완료 힙 (nvme-io.c:153-173).
+- poller와 링은 `nvme_init_poller()`가 만들고 (nvme-admin.c:234-282), `nvme_set_db_memory`에서 한 번 실행된 뒤 `dataplane_started = true` (nvme-admin.c:331-337). 기본 poller 1개 (`multipoller_enabled=0`, femu.c:624, nvme-admin.c:240).
+
 ## 6. 다음 할 일
 
-### 노션 정리 현황 (10/23)
+### 노션 정리 현황 (11/02)
 
-- 노션은 **소스 파일 단위**로 나뉨: `femu` 아래 `docs`, `bbssd`(`ftl.h`, `ftl-internal.h`, `bb.c`, `ftl.c`, `ftl-cache.c`, `ftl-datapath.c`), `nvme.h`, `nvme-io.c`, `femu.c`.
-- `ftl.h` 페이지: 5.2~5.7절 내용은 다른 세션에서 반영함.
-- 아직 반영하지 않은 것: 5.8절 (`ssd_init_params()`, GC 임계값). GC 흐름을 볼 때 이렇게 나눠 넣을 예정:
-  - `ssd_init_params()`, `bb_gc_forced_lines()` → 새 `ftl-geom.c` 페이지
-  - `should_gc()`, `should_gc_high()` → `ftl-internal.h` 페이지
-  - 배경 GC, 강제 GC 호출 → `ftl.c`, `ftl-datapath.c` 페이지
-- `ftl.h` 페이지의 `gc_thres_*` 항목에는 위 위치를 가리키는 메모만 남겨 두기로 함.
+> 10/23 현황(10.1 파일 단위 구조, 5.8절 미반영)은 11/02 개편으로 대체되어 지움. 이전 내용은 노션 백업 페이지와 git 기록(`0e3b08bff`)에 남아 있음.
+
+- 위치: 노션 `연구실 과제 / FEMU`. 상위 페이지 맨 위에 "코드 기준: 9.0.1" 안내를 넣음.
+- 10.1 기준 백업: 「코드 정리 (10.1.0 백업)」, 「IO흐름 (10.1.0 백업)」 (원본을 복제한 것).
+- 「코드 정리」 (9.0.1): `femu` 아래 `bbssd`(`ftl.h`, `ftl.c`, `bb.c`), `nvme.h`, `nvme-io.c`, `nvme-admin.c`(새로 추가), `femu.c`.
+  - `ftl.h`: 분류 토글 ①~⑥으로 정리함. 10.1 때의 "옵션 기능" 분류는 없앰. 5.8절 내용(`ssd_init_params`, GC 임계값)도 ③에 반영함.
+  - `ftl.c`: 기능별 하위 토글 11개(GC 조건, 매핑 헬퍼, victim 큐 콜백, line·write pointer, 초기화, 주소 헬퍼, 지연 계산, 페이지 상태, GC, 읽기·쓰기·TRIM, FTL 스레드)에 줄 범위와 핵심 동작만 넣음. 상세 분석은 앞으로 채움.
+  - `nvme.h`, `nvme-io.c`, `femu.c` 토글은 아직 비어 있음.
+- 「IO흐름」 (9.0.1): 0절(구성요소, 시간 모델, 기본 설정, 요청 일생)을 9.0.1 줄 번호로 고침. 1~4절은 아직 비어 있음.
 
 ### 코드 분석
 
-`ftl.h` 정리는 끝남. 이제 구조체 대신 실행 흐름을 읽음:
-- `ssd_write` → `ssd_program_lpn` → `femu_map_page_commit_write`
+`ftl.h` 정리는 끝남 (9.0.1 재확인 완료). 이제 구조체 대신 실행 흐름을 읽음. 9.0.1 기준 함수로 바꿈:
+- `ssd_write` (ftl.c:806-859): 강제 GC 검사 → LPN마다 old `mark_page_invalid` → `get_new_page` → `maptbl`/`rmap` 갱신 → `mark_page_valid` → `ssd_advance_write_pointer` → 지연 계산
 - 목표: **같은 LPN을 두 번 쓸 때** old/new PPA, `maptbl`, `rmap`, `vpc`/`ipc`가 어떻게 바뀌는지 설명하기
 
-이후 학습 순서 (`notes/FEMU_코드분석_가이드_검토.md` 4절):
-1. 읽기·지연: `ssd_read` → `ssd_advance_status` → `nand_media_op`
-2. 전체 I/O 경로를 스레드별로 정리
-3. GC: 임계값 → greedy 선택 → `reclaim_line`
-4. `docs/guides/measuring.md` 기준 baseline 실험
+이후 학습 순서 (`notes/FEMU_코드분석_가이드_검토.md` 4절을 9.0.1에 맞춤):
+1. 읽기·지연: `ssd_read` (ftl.c:770) → `ssd_advance_status` (ftl.c:456)
+2. 전체 I/O 경로를 스레드별로 정리 (노션 「IO흐름」 1~4절)
+3. GC: 임계값 → `select_victim_line` → `do_gc` → `clean_one_block` → `mark_line_free`
+4. baseline 실험: 9.0.1에는 `docs/guides/measuring.md`가 없으므로 fio 측정 방법을 따로 정해야 함. WAF는 카운터 추가가 필요하고, 실험 전에 `build-femu/`를 9.0.1로 다시 빌드해야 함
