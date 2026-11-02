@@ -1,6 +1,6 @@
 # FEMU 코드 분석 진행 상황 (인수인계용)
 
-작성: 2026-10-22 · 갱신: 2026-10-23 (`ftl.h` 구조체 정리 완료, 5·6절) · 이 문서만 읽어도 지금까지의 진행 상황을 따라올 수 있도록 정리한 것임.
+작성: 2026-10-22 · 갱신: 2026-10-23 (`ftl.h` 구조체 정리 완료, 5·6절), 2026-11-02 (코드 기준을 9.0.1로 변경, 2절) · 이 문서만 읽어도 지금까지의 진행 상황을 따라올 수 있도록 정리한 것임.
 
 ## 1. 목적과 작업 방식
 
@@ -11,25 +11,23 @@
 
 ## 2. 코드 기준 (중요)
 
-- 저장소: `github.com/hany-Park/FEMU` (MoatLab/FEMU의 fork), 로컬 경로 `/home/saram/FEMU` (WSL2, Ubuntu-22.04)
-- 브랜치: `ftl-test`, 커밋 **`601ddfe21` (2026-10-07)**. master와 같고, GitHub에도 push됨.
-- 빌드: `build-femu/qemu-system-x86_64`는 이 커밋으로 다시 빌드됨 (10/08).
-- **예전 코드와 구조가 다름.** 예전엔 BBSSD FTL이 `bbssd/ftl.c` 한 파일이었지만, 최신 master는 여러 파일로 나뉨. 예전 기준 자료(파일 하나짜리 `ftl.c`)는 위치가 맞지 않음.
+> **2026-11-02: 코드 기준을 FEMU 9.0.1로 되돌림.** 아래 4~6절의 분석은 이전 기준인 10.1.0 계열(`601ddfe21`)에서 한 것이라, 파일 이름·줄 번호·일부 기능(WAF 카운터, GC 정책 5종, 쓰기 버퍼 등)이 9.0.1과 다름. 9.0.1 코드로 다시 확인하기 전까지는 참고용으로만 볼 것.
 
-| 파일 (hw/femu/ 기준) | 내용 |
+- 저장소: `github.com/hany-Park/FEMU` (MoatLab/FEMU의 fork), 로컬 경로 `/home/saram/FEMU` (WSL2, Ubuntu-22.04)
+- 브랜치: `ftl-test` = `ad2d9fc71` (2025-07-15, QEMU 9.0.1 기반 FEMU의 마지막 커밋) 위에 문서 커밋만 올린 상태. `master`는 `ad2d9fc71`.
+  - 공식 태그 `femu-v9.0.1`(`3690338cf`, 2024-06-20) 이후의 수정 12개가 포함됨: 메모리 누수 수정, BBSSD TRIM 지원, ZNS 수정 등. 바로 다음 upstream 커밋 `eafddfdd0`이 QEMU 10.1.0 업그레이드임.
+- 이전 10.1.0 기준 코드는 GitHub 백업 브랜치에 있음: `backup/master-10.1.0-601ddfe21`, `backup/ftl-test-10.1.0-c78926d58`.
+- 빌드: `build-femu/`는 아직 10.1.0으로 빌드된 상태임. 9.0.1로 실험하려면 다시 빌드해야 함.
+- **9.0.1에서는 BBSSD FTL이 거의 `bbssd/ftl.c` 한 파일(약 1000줄)에 있음.** 처음 claude.ai가 만든 원본 가이드(`FEMU_코드분석_가이드.pdf`, 루트에 있음, 커밋 안 됨)가 이 구조에 더 가까움.
+
+| 파일 (hw/femu/ 기준, 9.0.1) | 내용 |
 |---|---|
-| `bbssd/ftl.h` | 자료구조 정의 |
-| `bbssd/ftl-internal.h` | 내부 함수 선언, `should_gc()` 등 inline 함수 |
-| `bbssd/ftl.c` | `bb_ftl_process_req()` 요청 분기, 배경 GC 호출, `ssd_waf_x1000()` |
-| `bbssd/ftl-datapath.c` | `ssd_read()`, `ssd_write()`, `ssd_program_lpn()`, 강제 GC 호출 |
-| `bbssd/ftl-line-gc.c` | line, write pointer, GC(`do_gc`, `reclaim_line`), 희생 정책 5종 |
-| `bbssd/ftl-media.c` | `ssd_advance_status()` (지연 계산 입구) |
-| `nand/nand-media.c` | `nand_media_op()` (실제 지연 계산) |
-| `bbssd/ftl-map.c` | `maptbl`/`rmap`, 기본 page 매핑 |
-| `bbssd/ftl-geom.c` | `ssd_init_params()` (스크립트 값 → `ssdparams`) |
-| `nvme-io.c` | SQ 처리(`nvme_process_sq_io`), 완료 처리(`nvme_process_cq_cpl`) |
-| `femu.c` | FTL 스레드(`femu_ftl_thread`), 장치 옵션 정의 |
-| `docs/design/ftl.md` | BBSSD FTL 공식 설계 문서 |
+| `bbssd/ftl.h` (237줄) | 자료구조 정의 |
+| `bbssd/ftl.c` | FTL 전체: `should_gc`(7), `ssd_init_params`(237), `ssd_init`(363), `ssd_advance_status`(456), `gc_write_page`(630), `select_victim_line`(668), `clean_one_block`(691), `mark_line_free`(713), `do_gc`(724), `ssd_read`(770), `ssd_write`(806), `ftl_thread`(944) |
+| `bbssd/bb.c` | BBSSD 모드 등록, 읽기·쓰기 명령 처리 |
+| `nvme-io.c` | `nvme_process_sq_io`(39), `nvme_process_cq_cpl`(137), `nvme_poller`(207) |
+| `femu.c` | 장치 초기화, 옵션 정의 |
+| `nand/`, `timing-model/` | NAND 보조 코드, 타이밍 모델 |
 
 ## 3. 지금까지의 경과
 
