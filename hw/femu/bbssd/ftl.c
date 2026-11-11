@@ -8,6 +8,7 @@ static uint64_t stat_host_write_pages = 0;
 static uint64_t stat_gc_write_pages   = 0;
 static uint64_t stat_gc_count         = 0;
 static uint64_t stat_erase_count      = 0;
+static uint64_t stat_hot_write_pages  = 0;
 
 static void femu_print_stats(void)
 {
@@ -15,6 +16,7 @@ static void femu_print_stats(void)
         (double)(stat_host_write_pages + stat_gc_write_pages) / stat_host_write_pages : 0.0;
     ftl_log("=== FEMU FTL STATS ===\n");
     ftl_log("host_write_pages : %lu\n", stat_host_write_pages);
+    ftl_log("hot_write_pages  : %lu\n", stat_hot_write_pages);
     ftl_log("gc_write_pages   : %lu\n", stat_gc_write_pages);
     ftl_log("gc_count         : %lu\n", stat_gc_count);
     ftl_log("erase_count      : %lu\n", stat_erase_count);
@@ -175,10 +177,9 @@ static struct line *get_next_free_line(struct ssd *ssd)
     return curline;
 }
 
-static void ssd_advance_write_pointer(struct ssd *ssd)
+static void ssd_advance_write_pointer(struct ssd *ssd, struct write_pointer *wpp)
 {
     struct ssdparams *spp = &ssd->sp;
-    struct write_pointer *wpp = &ssd->wp;
     struct line_mgmt *lm = &ssd->lm;
 
     check_addr(wpp->ch, spp->nchs);
@@ -229,9 +230,8 @@ static void ssd_advance_write_pointer(struct ssd *ssd)
     }
 }
 
-static struct ppa get_new_page(struct ssd *ssd)
+static struct ppa get_new_page(struct ssd *ssd, struct write_pointer *wpp)
 {
-    struct write_pointer *wpp = &ssd->wp;
     struct ppa ppa;
     ppa.ppa = 0;
     ppa.g.ch = wpp->ch;
@@ -242,6 +242,22 @@ static struct ppa get_new_page(struct ssd *ssd)
     ftl_assert(ppa.g.pl == 0);
 
     return ppa;
+}
+
+static struct write_pointer *ssd_hot_wp(struct ssd *ssd)
+{
+    struct write_pointer *wpp = &ssd->hot_wp;
+    if (!wpp->curline) {
+        wpp->curline = get_next_free_line(ssd);
+        if (!wpp->curline)
+            return &ssd->wp;
+        wpp->ch = 0;
+        wpp->lun = 0;
+        wpp->pg = 0;
+        wpp->pl = 0;
+        wpp->blk = wpp->curline->id;
+    }
+    return wpp;
 }
 
 static void check_params(struct ssdparams *spp)
@@ -655,7 +671,7 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
     uint64_t lpn = get_rmap_ent(ssd, old_ppa);
 
     ftl_assert(valid_lpn(ssd, lpn));
-    new_ppa = get_new_page(ssd);
+    new_ppa = get_new_page(ssd, &ssd->wp);
     /* update maptbl */
     set_maptbl_ent(ssd, lpn, &new_ppa);
     /* update rmap */
@@ -665,7 +681,7 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
     stat_gc_write_pages++;
 
     /* need to advance the write pointer here */
-    ssd_advance_write_pointer(ssd);
+    ssd_advance_write_pointer(ssd, &ssd->wp);
 
     if (ssd->sp.enable_gc_delay) {
         struct nand_cmd gcw;
@@ -834,6 +850,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
     uint64_t start_lpn = lba / spp->secs_per_pg;
     uint64_t end_lpn = (lba + len - 1) / spp->secs_per_pg;
     struct ppa ppa;
+    struct write_pointer *wpp;
     uint64_t lpn;
     uint64_t curlat = 0, maxlat = 0;
     int r;
@@ -851,6 +868,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
         ppa = get_maptbl_ent(ssd, lpn);
+        bool hot = mapped_ppa(&ppa);
         if (mapped_ppa(&ppa)) {
             /* update old page information first */
             mark_page_invalid(ssd, &ppa);
@@ -861,7 +879,8 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         }
 
         /* new write */
-        ppa = get_new_page(ssd);
+        wpp = hot ? ssd_hot_wp(ssd) : &ssd->wp;
+        ppa = get_new_page(ssd, wpp);
         /* update maptbl */
         set_maptbl_ent(ssd, lpn, &ppa);
         /* update rmap */
@@ -870,8 +889,9 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         mark_page_valid(ssd, &ppa);
 
         /* need to advance the write pointer here */
-        ssd_advance_write_pointer(ssd);
+        ssd_advance_write_pointer(ssd, wpp);
         stat_host_write_pages++;
+        if(hot) stat_hot_write_pages++;
 
         struct nand_cmd swr;
         swr.type = USER_IO;
