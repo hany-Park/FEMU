@@ -10,11 +10,11 @@ static uint64_t stat_gc_count         = 0;
 static uint64_t stat_erase_count      = 0;
 static uint64_t stat_hot_write_pages  = 0;
 
-static void femu_print_stats(void)
+void ftl_print_stats(const char *title)
 {
     double waf = stat_host_write_pages ?
         (double)(stat_host_write_pages + stat_gc_write_pages) / stat_host_write_pages : 0.0;
-    ftl_log("=== FEMU FTL STATS ===\n");
+    ftl_log("=== FEMU FTL %s ===\n", title);
     ftl_log("host_write_pages : %lu\n", stat_host_write_pages);
     ftl_log("hot_write_pages  : %lu\n", stat_hot_write_pages);
     ftl_log("gc_write_pages   : %lu\n", stat_gc_write_pages);
@@ -872,9 +872,6 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         if (mapped_ppa(&ppa)) {
             /* update old page information first */
             mark_page_invalid(ssd, &ppa);
-            if (stat_host_write_pages % 100000 == 0) {
-                femu_print_stats();
-            }
             set_rmap_ent(ssd, INVALID_LPN, &ppa);
         }
 
@@ -891,7 +888,12 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         /* need to advance the write pointer here */
         ssd_advance_write_pointer(ssd, wpp);
         stat_host_write_pages++;
-        if(hot) stat_hot_write_pages++;
+        if (hot) {
+            stat_hot_write_pages++;
+        }
+        if (stat_host_write_pages % 100000 == 0) {
+            ftl_print_stats("STATS");
+        }
 
         struct nand_cmd swr;
         swr.type = USER_IO;

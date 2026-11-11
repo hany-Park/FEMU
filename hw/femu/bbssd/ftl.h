@@ -42,6 +42,7 @@ enum {
     FEMU_RESET_ACCT = 5,
     FEMU_ENABLE_LOG = 6,
     FEMU_DISABLE_LOG = 7,
+    FEMU_PRINT_FTL_STATS = 8,
 };
 
 
@@ -212,6 +213,7 @@ struct ssd {
 };
 
 void ssd_init(FemuCtrl *n);
+void ftl_print_stats(const char *title);
 
 #ifdef FEMU_DEBUG_FTL
 #define ftl_debug(fmt, ...) \
