@@ -2,6 +2,27 @@
 
 //#define FEMU_DEBUG_FTL
 
+// WAF counter function & variables
+
+static uint64_t stat_host_write_pages = 0;
+static uint64_t stat_gc_write_pages   = 0;
+static uint64_t stat_gc_count         = 0;
+static uint64_t stat_erase_count      = 0;
+
+static void femu_print_stats(void)
+{
+    double waf = stat_host_write_pages ?
+        (double)(stat_host_write_pages + stat_gc_write_pages) / stat_host_write_pages : 0.0;
+    ftl_log("=== FEMU FTL STATS ===\n");
+    ftl_log("host_write_pages : %lu\n", stat_host_write_pages);
+    ftl_log("gc_write_pages   : %lu\n", stat_gc_write_pages);
+    ftl_log("gc_count         : %lu\n", stat_gc_count);
+    ftl_log("erase_count      : %lu\n", stat_erase_count);
+    ftl_log("WAF              : %.4f\n", waf);
+}
+
+// ============================
+
 static void *ftl_thread(void *arg);
 
 static inline bool should_gc(struct ssd *ssd)
@@ -641,6 +662,7 @@ static uint64_t gc_write_page(struct ssd *ssd, struct ppa *old_ppa)
     set_rmap_ent(ssd, lpn, &new_ppa);
 
     mark_page_valid(ssd, &new_ppa);
+    stat_gc_write_pages++;
 
     /* need to advance the write pointer here */
     ssd_advance_write_pointer(ssd);
@@ -733,6 +755,7 @@ static int do_gc(struct ssd *ssd, bool force)
     if (!victim_line) {
         return -1;
     }
+    stat_gc_count++;
 
     ppa.g.blk = victim_line->id;
     ftl_debug("GC-ing line:%d,ipc=%d,victim=%d,full=%d,free=%d\n", ppa.g.blk,
@@ -748,6 +771,7 @@ static int do_gc(struct ssd *ssd, bool force)
             lunp = get_lun(ssd, &ppa);
             clean_one_block(ssd, &ppa);
             mark_block_free(ssd, &ppa);
+            stat_erase_count++;
 
             if (spp->enable_gc_delay) {
                 struct nand_cmd gce;
@@ -763,7 +787,6 @@ static int do_gc(struct ssd *ssd, bool force)
 
     /* update line status */
     mark_line_free(ssd, &ppa);
-
     return 0;
 }
 
@@ -831,6 +854,9 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         if (mapped_ppa(&ppa)) {
             /* update old page information first */
             mark_page_invalid(ssd, &ppa);
+            if (stat_host_write_pages % 100000 == 0) {
+                femu_print_stats();
+            }
             set_rmap_ent(ssd, INVALID_LPN, &ppa);
         }
 
@@ -845,6 +871,7 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 
         /* need to advance the write pointer here */
         ssd_advance_write_pointer(ssd);
+        stat_host_write_pages++;
 
         struct nand_cmd swr;
         swr.type = USER_IO;
