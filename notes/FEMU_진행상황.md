@@ -1,10 +1,10 @@
 # FEMU 코드 분석 진행 상황 (인수인계용)
 
-작성: 2026-10-22 · 갱신: 2026-10-23 (`ftl.h` 구조체 정리 완료, 5·6절), 2026-11-02 (코드 기준을 9.0.1로 변경, 2절 / 9.0.1 재확인과 노션 개편, 5.9·6절 / 로컬·서버 실행 스크립트 분리, 2.1절) · 이 문서만 읽어도 지금까지의 진행 상황을 따라올 수 있도록 정리한 것임.
+작성: 2026-10-22 · 갱신: 2026-10-23 (`ftl.h` 구조체 정리 완료, 5·6절), 2026-11-02 (코드 기준을 9.0.1로 변경, 2절 / 9.0.1 재확인과 노션 개편, 5.9·6절 / 로컬·서버 실행 스크립트 분리, 2.1절), 2026-11-12 (hot/cold 실험 시작: 실험 브랜치·서버 환경·스크립트, 1·2·2.1·3·6절, 상세는 `notes/실험_hotcold.md`) · 이 문서만 읽어도 지금까지의 진행 상황을 따라올 수 있도록 정리한 것임.
 
 ## 1. 목적과 작업 방식
 
-- 목적: FEMU BlackBox SSD(BBSSD) FTL 코드를 이해하고 발표를 준비함. 지금은 **코드 이해 단계**이고, 코드 수정·빌드·실험은 하지 않음.
+- 목적: FEMU BlackBox SSD(BBSSD) FTL 코드를 이해하고 발표를 준비함. 11/12부터는 **hot/cold 분리 실험**도 함 (`exp/*` 브랜치에서만 코드를 고침, `notes/실험_hotcold.md`). 이전 문구("코드 수정·빌드·실험은 하지 않음")는 실험을 시작해서 고침.
 - 선임이 요구한 발표 질문 5개: ① I/O 요청 전체 흐름 ② latency 계산 ③ bandwidth 계산 ④ WAF 계산 ⑤ GC·Deadline(요청 큐) 재설계.
 - 설명 방식: 한국어, 파일 경로와 줄 번호를 근거로 들 것, 코드로 확인한 사실과 추정을 구분할 것.
 - 분석 범위: 기본 경로만 봄. `femu_mode=1`, 단일 namespace, `mapping=page`, `gc_policy=greedy`이고, FDP·Streams·쓰기 버퍼·읽기 캐시·추가 타이밍 옵션은 꺼진 상태 기준.
@@ -17,7 +17,8 @@
 - 브랜치: `ftl-test` = `ad2d9fc71` (2025-07-15, QEMU 9.0.1 기반 FEMU의 마지막 커밋) 위에 문서 커밋만 올린 상태. `master`는 `ad2d9fc71`.
   - 공식 태그 `femu-v9.0.1`(`3690338cf`, 2024-06-20) 이후의 수정 12개가 포함됨: 메모리 누수 수정, BBSSD TRIM 지원, ZNS 수정 등. 바로 다음 upstream 커밋 `eafddfdd0`이 QEMU 10.1.0 업그레이드임.
 - 이전 10.1.0 기준 코드는 GitHub 백업 브랜치에 있음: `backup/master-10.1.0-601ddfe21`, `backup/ftl-test-10.1.0-c78926d58`.
-- 빌드: `build-femu/`는 로컬·서버 모두 아직 10.1.0으로 빌드된 상태임. 9.0.1로 실험하려면 다시 빌드해야 함 (2.1절).
+- 빌드: 서버는 실험 브랜치별 worktree(`~/femu-baseline`, `~/femu-hotcold1`)에서 9.0.1로 새로 빌드함 (11/12, 사용자 진행. 2.1절). 로컬 `build-femu/`는 아직 10.1.0 빌드임.
+- 실험 브랜치 (11/12): `exp/baseline`(9.0.1 + 카운터·스냅샷), `exp/hotcold1`(+ 10.1 hot/cold 규칙). 구성과 커밋은 `notes/실험_hotcold.md` 1절.
 - **9.0.1에서는 BBSSD FTL이 거의 `bbssd/ftl.c` 한 파일(약 1000줄)에 있음.** 처음 claude.ai가 만든 원본 가이드(`FEMU_코드분석_가이드.pdf`, 루트에 있음, 커밋 안 됨)가 이 구조에 더 가까움.
 
 | 파일 (hw/femu/ 기준, 9.0.1) | 내용 |
@@ -51,6 +52,10 @@
   2. `git fetch origin` → `git reset --hard origin/ftl-test` (`c78926d58`은 GitHub `backup/ftl-test-10.1.0-c78926d58`에 있음)
   3. `build-femu/`를 지우고 새로 만든 뒤 `femu-copy-scripts.sh` → `femu-compile.sh`
   - 로컬 `build-femu/`도 같은 방법으로 다시 빌드해야 함.
+- **서버 상태 (11/12, 사용자 보고와 화면 출력 기준)**: 위 방법 대신 실험 브랜치별 worktree를 만들어 빌드함 (`~/femu-baseline`, `~/femu-hotcold1`. 메인 clone `~/FEMU`는 `ftl-test`로 두고 `exp-scripts/`를 실행). baseline 빌드 완료는 화면으로 확인함. hotcold1 worktree는 한 번 만들어지지 않은 적이 있어 다시 확인이 필요함.
+  - KVM: 계정에 `/dev/kvm` 권한이 없음 (`Permission denied`). 관리자에게 `kvm` 그룹 추가를 요청할 수 있음.
+  - sudo: 한때 sudoers가 QEMU 실행을 거부했으나 이후 sudo로 실행 가능해짐. 지금은 sudo가 들어 있는 원본 스크립트로 실행하고, 비밀번호는 실행할 때 `sudo -v`로만 입력함 (문서·스크립트에 넣지 않음).
+  - 게스트 준비(ssh 키, fio·nvme-cli, 비밀번호 없는 sudo)와 실험 스크립트 실행은 아직 확인 안 됨.
 
 ## 3. 지금까지의 경과
 
@@ -63,6 +68,9 @@
 7. **코드 기준을 9.0.1로 되돌림 (11/02)**: 10.1.0 계열은 정식 릴리즈가 없고(upstream 태그는 `femu-v9.0.1`이 최신) 코드가 커서, 발표용으로는 9.0.1이 낫다고 판단함 (2절).
 8. **노션을 9.0.1 기준으로 개편 (11/02, Claude Code)**: 10.1 기준 페이지는 백업으로 복제해 두고, 원본을 9.0.1 코드와 대조해 다시 씀. 새로 확인한 내용은 5.9절, 노션 현황은 6절.
 9. **로컬·서버 실행 스크립트 분리 (11/02, Claude Code)**: 서버는 64GB, 로컬은 8GB NAND로 돌리도록 실행 스크립트를 2개로 나눔. 브랜치는 나누지 않음 (2.1절).
+10. **측정 코드 (11/06~12, 사용자)**: 9.0.1에 WAF·GC 카운터를 직접 넣음. 처음 버전의 문제 두 개(호스트 쓰기를 덮어쓰기만 셈, erase를 line 단위로 셈)를 고치고, 구간 경계에서 값을 찍는 스냅샷 명령(flip `cdw10=8`)을 추가함 → `exp/baseline`.
+11. **hot/cold 1차 (11/11~12)**: 10.1 `hot_cold_sep` 규칙(덮어쓰기 = hot, hot은 별도 write pointer)을 9.0.1에 옮김. Claude가 참고 구현을 만든 뒤 되돌리고, 사용자가 단계별 안내를 보고 직접 구현함 → `exp/hotcold1`. 두 구현은 동작이 같음을 diff로 확인함.
+12. **실험 설계·스크립트 (11/12, Claude Code)**: 서버 실험 설계(버전 2 × 워크로드 3 × 3회)와 실행 스크립트 `exp-scripts/`(`run_one.sh`, `run_all.sh`, `parse.py`)를 `ftl-test`에 추가함. 문법 검사와 가짜 로그 시험만 했고 실제 실행은 아직 안 함. 상세는 `notes/실험_hotcold.md`.
 
 ## 4. 가이드에서 바로잡을 점 (Codex 검토, 일부 코드로 재확인함)
 
@@ -181,6 +189,16 @@
 
 ## 6. 다음 할 일
 
+### hot/cold 실험 (11/12)
+
+상세 순서와 명령은 `notes/실험_hotcold.md` 4·5절.
+1. 서버 `git worktree list`로 두 worktree가 모두 있는지, 두 `build-femu`에 9.0.1 빌드(스냅샷 코드 포함)가 있는지 확인
+2. 게스트 준비 (ssh 키, fio·nvme-cli, 비밀번호 없는 sudo) 후 VM 종료
+3. 서버 `~/FEMU`를 `ftl-test`로 두고 `git pull` → `exp-scripts/run_one.sh baseline zone80 0`으로 파일럿 1회. 스냅샷 3개가 `femu.log`에 찍히는지, 걸린 시간 확인
+4. 시간을 보고 `CAP`·반복 수를 정한 뒤 `run_all.sh` (tmux 안에서)
+5. `parse.py`로 CSV를 만들어 `notes/실험_hotcold.md` 6절에 정리
+- KVM 권한을 받으면 sudo 없이 실행하도록 바꿈 (`RUN=./run-nosudo.sh`).
+
 ### 노션 정리 현황 (11/02)
 
 > 10/23 현황(10.1 파일 단위 구조, 5.8절 미반영)은 11/02 개편으로 대체되어 지움. 이전 내용은 노션 백업 페이지와 git 기록(`0e3b08bff`)에 남아 있음.
@@ -203,4 +221,4 @@
 1. 읽기·지연: `ssd_read` (ftl.c:770) → `ssd_advance_status` (ftl.c:456)
 2. 전체 I/O 경로를 스레드별로 정리 (노션 「IO흐름」 1~4절)
 3. GC: 임계값 → `select_victim_line` → `do_gc` → `clean_one_block` → `mark_line_free`
-4. baseline 실험: 9.0.1에는 `docs/guides/measuring.md`가 없으므로 fio 측정 방법을 따로 정해야 함. WAF는 카운터 추가가 필요하고, 실험 전에 `build-femu/`를 9.0.1로 다시 빌드해야 함
+4. ~~baseline 실험: fio 측정 방법을 따로 정해야 함~~ → 11/12 hot/cold 실험 설계로 정함 (`notes/실험_hotcold.md`, 위 "hot/cold 실험" 참고)
