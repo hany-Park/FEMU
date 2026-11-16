@@ -1,6 +1,6 @@
 # FEMU 코드 분석 진행 상황 (인수인계용)
 
-작성: 2026-10-22 · 갱신: 2026-10-23 (`ftl.h` 구조체 정리 완료, 5·6절), 2026-11-02 (코드 기준을 9.0.1로 변경, 2절 / 9.0.1 재확인과 노션 개편, 5.9·6절 / 로컬·서버 실행 스크립트 분리, 2.1절), 2026-11-12 (hot/cold 실험 시작: 실험 브랜치·서버 환경·스크립트, 1·2·2.1·3·6절, 상세는 `notes/실험_hotcold.md`) · 이 문서만 읽어도 지금까지의 진행 상황을 따라올 수 있도록 정리한 것임.
+작성: 2026-10-22 · 갱신: 2026-10-23 (`ftl.h` 구조체 정리 완료, 5·6절), 2026-11-02 (코드 기준을 9.0.1로 변경, 2절 / 9.0.1 재확인과 노션 개편, 5.9·6절 / 로컬·서버 실행 스크립트 분리, 2.1절), 2026-11-12 (hot/cold 실험 시작: 실험 브랜치·서버 환경·스크립트, 1·2·2.1·3·6절, 상세는 `notes/실험_hotcold.md`), 2026-11-17 (서버 파일럿·로컬 비교 결과, GC 75에서 WAF가 약 8로 고정되는 원인, 선배 답변, 과제 요구사항 대조: 2·2.1·3·6절, 상세는 `notes/실험_hotcold.md` 6·7절) · 이 문서만 읽어도 지금까지의 진행 상황을 따라올 수 있도록 정리한 것임.
 
 ## 1. 목적과 작업 방식
 
@@ -17,8 +17,8 @@
 - 브랜치: `ftl-test` = `ad2d9fc71` (2025-07-15, QEMU 9.0.1 기반 FEMU의 마지막 커밋) 위에 문서 커밋만 올린 상태. `master`는 `ad2d9fc71`.
   - 공식 태그 `femu-v9.0.1`(`3690338cf`, 2024-06-20) 이후의 수정 12개가 포함됨: 메모리 누수 수정, BBSSD TRIM 지원, ZNS 수정 등. 바로 다음 upstream 커밋 `eafddfdd0`이 QEMU 10.1.0 업그레이드임.
 - 이전 10.1.0 기준 코드는 GitHub 백업 브랜치에 있음: `backup/master-10.1.0-601ddfe21`, `backup/ftl-test-10.1.0-c78926d58`.
-- 빌드: 서버는 실험 브랜치별 worktree(`~/femu-baseline`, `~/femu-hotcold1`)에서 9.0.1로 새로 빌드함 (11/12, 사용자 진행. 2.1절). 로컬 `build-femu/`는 아직 10.1.0 빌드임.
-- 실험 브랜치 (11/12): `exp/baseline`(9.0.1 + 카운터·스냅샷), `exp/hotcold1`(+ 10.1 hot/cold 규칙). 구성과 커밋은 `notes/실험_hotcold.md` 1절.
+- 빌드: 서버는 실험 브랜치별 worktree(`~/femu-baseline`, `~/femu-hotcold1`)에서 9.0.1로 새로 빌드함 (11/12, 사용자 진행. 2.1절). 로컬도 11/13에 같은 worktree 구성(`~/femu-baseline`, `~/femu-hotcold1`)으로 9.0.1을 빌드함. 메인 clone의 `build-femu/`는 아직 10.1.0 빌드임.
+- 실험 브랜치 (11/12): `exp/baseline`(9.0.1 + 카운터·스냅샷), `exp/hotcold1`(+ 10.1 hot/cold 규칙), `exp/hotcold2`(빈도 기반용, 로컬에만 있고 11/17 기준 코드 변경 없음). 구성과 커밋은 `notes/실험_hotcold.md` 1절.
 - **9.0.1에서는 BBSSD FTL이 거의 `bbssd/ftl.c` 한 파일(약 1000줄)에 있음.** 처음 claude.ai가 만든 원본 가이드(`FEMU_코드분석_가이드.pdf`, 루트에 있음, 커밋 안 됨)가 이 구조에 더 가까움.
 
 | 파일 (hw/femu/ 기준, 9.0.1) | 내용 |
@@ -45,7 +45,7 @@
 
   - 나머지(지연 값, GC 임계값 75/95, `-m 4G`, `-smp 4`)는 원본과 같음. `IMGDIR`·`OSIMGF`는 환경 변수로 바꿀 수 있게 함. 서버 64GB는 "NAND 전체 크기" 기준으로 정함.
   - `femu-copy-scripts.sh`의 `CPL` 목록에 두 스크립트를 추가함. `build-femu/`에서 복사 스크립트를 실행한 뒤 환경에 맞는 스크립트를 실행하면 됨 (스크립트가 `./qemu-system-x86_64`를 현재 디렉터리에서 찾음).
-  - **아직 실행해 보지 않음** (`bash -n` 문법 검사만 함).
+  - ~~아직 실행해 보지 않음 (`bash -n` 문법 검사만 함).~~ → 11/12 서버(`run-blackbox-server.sh`), 11/13 로컬(`run-blackbox-local.sh`)에서 실제로 실행함 (`notes/실험_hotcold.md` 6절).
 - **주의**: geometry가 다르면 line 수(`tt_lines = blks_per_lun`, ftl.c:279)와 GC 임계값(ftl.c:280-282)이 함께 바뀜. 로컬은 동작 확인·디버깅용으로만 쓰고, 발표용 수치는 서버 결과만 씀. VM 안의 워크로드 크기(fio `size` 등)도 장치 크기에 맞춰 비율로 정함.
 - **서버 상태 (11/02 확인)**: 서버 `ftl-test`는 아직 `c78926d58`(10.1.0 계열)이고, `build-femu/`에 10.1.0 전용 스크립트(`run-blackbox-fdp.sh` 등)가 남아 있음. `c78926d58`은 지금 `origin/ftl-test`의 조상이 아니므로 `git pull`로는 맞출 수 없음. 서버에서 할 일:
   1. `git status`로 커밋 안 한 실험 결과가 있는지 확인하고, 있으면 따로 복사함
@@ -55,7 +55,9 @@
 - **서버 상태 (11/12, 사용자 보고와 화면 출력 기준)**: 위 방법 대신 실험 브랜치별 worktree를 만들어 빌드함 (`~/femu-baseline`, `~/femu-hotcold1`. 메인 clone `~/FEMU`는 `ftl-test`로 두고 `exp-scripts/`를 실행). baseline 빌드 완료는 화면으로 확인함. hotcold1 worktree는 한 번 만들어지지 않은 적이 있어 다시 확인이 필요함.
   - KVM: 계정에 `/dev/kvm` 권한이 없음 (`Permission denied`). 관리자에게 `kvm` 그룹 추가를 요청할 수 있음.
   - sudo: 한때 sudoers가 QEMU 실행을 거부했으나 이후 sudo로 실행 가능해짐. 지금은 sudo가 들어 있는 원본 스크립트로 실행하고, 비밀번호는 실행할 때 `sudo -v`로만 입력함 (문서·스크립트에 넣지 않음).
-  - 게스트 준비(ssh 키, fio·nvme-cli, 비밀번호 없는 sudo)와 실험 스크립트 실행은 아직 확인 안 됨.
+  - ~~게스트 준비와 실험 스크립트 실행은 아직 확인 안 됨.~~ → 11/12에 게스트 준비를 마치고 baseline 파일럿 1회를 끝냄.
+  - **sudo는 `~/FEMU/build-femu/qemu-system-x86_64` 한 경로만 허용됨** (11/12 확인). 그래서 실험할 버전을 그 경로에 빌드해서 돌려야 하고, `run_one.sh`의 강제 종료 `sudo pkill`도 거부됨 (아직 고치지 않음). 게스트 sudo 설정 명령은 `ssh -t`가 필요함. 상세는 `notes/실험_hotcold.md` 4절.
+- **로컬 KVM (11/13)**: 11/12에는 로컬 WSL에 `/dev/kvm`이 없어 실행할 수 없었으나, 11/13에는 로컬에서 FEMU 실행에 성공함 (11/17 `/dev/kvm` 있음 확인).
 
 ## 3. 지금까지의 경과
 
@@ -71,6 +73,11 @@
 10. **측정 코드 (11/06~12, 사용자)**: 9.0.1에 WAF·GC 카운터를 직접 넣음. 처음 버전의 문제 두 개(호스트 쓰기를 덮어쓰기만 셈, erase를 line 단위로 셈)를 고치고, 구간 경계에서 값을 찍는 스냅샷 명령(flip `cdw10=8`)을 추가함 → `exp/baseline`.
 11. **hot/cold 1차 (11/11~12)**: 10.1 `hot_cold_sep` 규칙(덮어쓰기 = hot, hot은 별도 write pointer)을 9.0.1에 옮김. Claude가 참고 구현을 만든 뒤 되돌리고, 사용자가 단계별 안내를 보고 직접 구현함 → `exp/hotcold1`. 두 구현은 동작이 같음을 diff로 확인함.
 12. **실험 설계·스크립트 (11/12, Claude Code)**: 서버 실험 설계(버전 2 × 워크로드 3 × 3회)와 실행 스크립트 `exp-scripts/`(`run_one.sh`, `run_all.sh`, `parse.py`)를 `ftl-test`에 추가함. 문법 검사와 가짜 로그 시험만 했고 실제 실행은 아직 안 함. 상세는 `notes/실험_hotcold.md`.
+13. **서버 baseline 파일럿 (11/12, 사용자 + Claude Code)**: `zone80` 1회. 측정 구간 WAF 7.98, p99 55.8ms. 서버 sudo 제약 때문에 `~/FEMU/build-femu`에 빌드해서 실행함 (2.1절).
+14. **로컬 baseline vs hotcold1 (11/13, 사용자)**: `zone80` 1회씩. WAF 7.97 vs 7.94, hotcold1의 `hot_ratio` = 1.0. 분리 효과가 거의 없음.
+15. **원인 분석 (11/12~13, Claude Code)**: GC 75 + 노출 공간 100% 채움에서는 배경 GC가 계속 켜져 있어서, victim이 invalid 2,048개(line의 1/8, greedy 회수 기준 ftl.c:678)가 되는 순간 회수됨 → 배치 정책과 무관하게 WAF 약 8 (`notes/실험_hotcold.md` 6.3절).
+16. **선배 답변 (11/17 기록)**: GC threshold는 원칙상 유지하고 다른 방법으로 WAF를 개선해 볼 것(어려우면 바꿔도 됨). 결과는 baseline과 ours의 WAF를 시간에 따른 꺾은선 그래프로 비교.
+17. **과제 요구사항 대조 (11/12, 11/17 갱신)**: ① 라인 재설계 ② hot/cold 판단(LBA 요청 빈도 + 블록 erase 횟수) ③ WAF 계산. ③만 됨, ①은 일부, ②는 아직 (`notes/실험_hotcold.md` 7절).
 
 ## 4. 가이드에서 바로잡을 점 (Codex 검토, 일부 코드로 재확인함)
 
@@ -189,14 +196,16 @@
 
 ## 6. 다음 할 일
 
-### hot/cold 실험 (11/12)
+### hot/cold 실험 (11/17 갱신)
 
-상세 순서와 명령은 `notes/실험_hotcold.md` 4·5절.
-1. 서버 `git worktree list`로 두 worktree가 모두 있는지, 두 `build-femu`에 9.0.1 빌드(스냅샷 코드 포함)가 있는지 확인
-2. 게스트 준비 (ssh 키, fio·nvme-cli, 비밀번호 없는 sudo) 후 VM 종료
-3. 서버 `~/FEMU`를 `ftl-test`로 두고 `git pull` → `exp-scripts/run_one.sh baseline zone80 0`으로 파일럿 1회. 스냅샷 3개가 `femu.log`에 찍히는지, 걸린 시간 확인
-4. 시간을 보고 `CAP`·반복 수를 정한 뒤 `run_all.sh` (tmux 안에서)
-5. `parse.py`로 CSV를 만들어 `notes/실험_hotcold.md` 6절에 정리
+> 11/12 목록의 1~3단계(worktree·빌드 확인, 게스트 준비, 파일럿)는 끝나서 새 목록으로 바꿈. 이전 목록은 git 기록(`4109cba8b`)에 있음.
+
+과제 요구사항과 상태는 `notes/실험_hotcold.md` 7절, 결과와 분석은 6절.
+1. **시간에 따른 WAF 그래프**: `femu.log`의 `STATS` 줄(host 10만 페이지마다 누적값)로 구간 WAF를 계산해 baseline과 ours를 꺾은선으로 비교하는 스크립트 작성
+2. **hotcold2**: LBA 요청 빈도 기반 분류 구현 (`~/femu-hotcold2`). 계획은 7절
+3. **erase 횟수 사용처를 선배에게 확인**: hot/cold 판단에 쓰는지, 배치(erase가 적은 line 우선)에 쓰는지
+4. **라인 재설계**: GC 75를 유지하면 배치만으로는 WAF가 약 8에서 거의 안 바뀜(6.3절, 추정 포함). GC가 옮기는 데이터 분리, free line 선택 등을 검토
+5. **서버 본 실험**: `run_one.sh`의 `sudo pkill` 문제를 먼저 해결. 버전마다 `~/FEMU/build-femu`를 다시 빌드해서 따로 돌림. 결과는 `parse.py`로 정리해 6절에 추가
 - KVM 권한을 받으면 sudo 없이 실행하도록 바꿈 (`RUN=./run-nosudo.sh`).
 
 ### 노션 정리 현황 (11/02)
