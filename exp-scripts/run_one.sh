@@ -5,8 +5,19 @@
 # usage: run_one.sh <variant> <workload> <rep>
 #   variant  : worktree suffix, built in $WT_PREFIX<variant>/build-femu
 #              (baseline, hotcold1, ...)
-#   workload : uniform | zone80 | zone95
+#   workload : uniform | zone80 | zone95     4k, QD32, whole device
+#              zipf | zipf08 | zipf12        16k, QD128, 94% of the device
+#              (zipf = the assignment's zipf:0.99; zipf08/zipf12 = theta
+#              0.8/1.2 for a weaker/stronger skew. 94% ~ 45G of 48G, so
+#              the never-written rest leaves free lines at GC 75)
 #   rep      : repetition label (1, 2, 3, ...)
+#
+# env (workload defaults above; set any of these to override them):
+#   DIST=zipf:0.99                 fio random_distribution
+#   BS=16k                         block size of the random writes
+#   FOOT=94%                       range that fill and the random writes cover
+#                                  (fio size=; a whole percent or a size)
+#   QD=128                         iodepth of the random writes
 #
 # env:
 #   RUN=./run-blackbox-server.sh   run script inside build-femu
@@ -36,17 +47,22 @@ VM_PAT='[F]EMU-BBSSD-VM'
 SSH="ssh -p 8080 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR femu@localhost"
 DEV=/dev/nvme0n1
 
+#        distribution          bs   range  iodepth
 case $WL in
-uniform) DIST="--random_distribution=random" ;;
-zone80)  DIST="--random_distribution=zoned:80/20:20/80" ;;
-zone95)  DIST="--random_distribution=zoned:95/5:5/95" ;;
+uniform) set -- random              4k  100%   32  ;;
+zone80)  set -- zoned:80/20:20/80   4k  100%   32  ;;
+zone95)  set -- zoned:95/5:5/95     4k  100%   32  ;;
+zipf)    set -- zipf:0.99           16k 94%    128 ;;
+zipf08)  set -- zipf:0.8            16k 94%    128 ;;
+zipf12)  set -- zipf:1.2            16k 94%    128 ;;
 *) echo "unknown workload: $WL" >&2; exit 1 ;;
 esac
+DIST=${DIST:-$1}; BS=${BS:-$2}; FOOT=${FOOT:-$3}; QD=${QD:-$4}
 
 FIO="sudo fio --filename=$DEV --direct=1 --ioengine=libaio --group_reporting --output-format=json"
 # --norandommap: without it fio writes every block exactly once per pass,
 # which is not random overwriting
-RAND="--rw=randwrite --bs=4k --iodepth=32 --size=100% --io_size=$CAP --norandommap --randrepeat=1 --randseed=1234 $DIST"
+RAND="--rw=randwrite --bs=$BS --iodepth=$QD --size=$FOOT --io_size=$CAP --norandommap --randrepeat=1 --randseed=1234 --random_distribution=$DIST"
 
 log() { echo "[$(date +%T)] $VARIANT $WL rep$REP: $*"; }
 snap() { $SSH "sudo nvme admin-passthru /dev/nvme0 --opcode=0xef --cdw10=8" >/dev/null; }
@@ -92,7 +108,12 @@ for _ in $(seq 120); do
 done
 $SSH true
 
-log "fill";    $SSH "$FIO --name=fill --rw=write --bs=1M --iodepth=32 --size=100%" > "$OUT/fill.json"
+# record what this run used, next to its results
+printf 'variant=%s workload=%s rep=%s dist=%s bs=%s foot=%s qd=%s cap=%s run=%s\n' \
+    "$VARIANT" "$WL" "$REP" "$DIST" "$BS" "$FOOT" "$QD" "$CAP" "$RUN" > "$OUT/params.txt"
+
+# fill only the range the random writes will cover
+log "fill";    $SSH "$FIO --name=fill --rw=write --bs=1M --iodepth=32 --size=$FOOT" > "$OUT/fill.json"
 snap
 log "warmup";  $SSH "$FIO --name=warmup $RAND" > "$OUT/warmup.json"
 snap
