@@ -1,6 +1,9 @@
 #include "ftl.h"
 
 //#define FEMU_DEBUG_FTL
+#define HOT_THRES 2
+// OP 25% -> 3 * 16 = 1/4 of 75%
+#define DECAY_PAGES ((uint64_t)ssd->sp.tt_pgs * 3 / 16)
 
 // WAF counter function & variables
 
@@ -387,6 +390,13 @@ static void ssd_init_maptbl(struct ssd *ssd)
     }
 }
 
+static void ssd_init_wcnt(struct ssd *ssd)
+{
+    struct ssdparams *spp = &ssd->sp;
+
+    ssd->wcnt = g_malloc0(sizeof(*ssd->wcnt) * spp->tt_pgs);
+}
+
 static void ssd_init_rmap(struct ssd *ssd)
 {
     struct ssdparams *spp = &ssd->sp;
@@ -414,6 +424,9 @@ void ssd_init(FemuCtrl *n)
 
     /* initialize maptbl */
     ssd_init_maptbl(ssd);
+
+    /* initialize counter */
+    ssd_init_wcnt(ssd);
 
     /* initialize rmap */
     ssd_init_rmap(ssd);
@@ -868,7 +881,10 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
 
     for (lpn = start_lpn; lpn <= end_lpn; lpn++) {
         ppa = get_maptbl_ent(ssd, lpn);
-        bool hot = mapped_ppa(&ppa);
+        if (ssd->wcnt[lpn] < UINT8_MAX) {
+            ssd->wcnt[lpn]++;
+        }
+        bool hot = ssd->wcnt[lpn] >= HOT_THRES;
         if (mapped_ppa(&ppa)) {
             /* update old page information first */
             mark_page_invalid(ssd, &ppa);
@@ -893,6 +909,11 @@ static uint64_t ssd_write(struct ssd *ssd, NvmeRequest *req)
         }
         if (stat_host_write_pages % 100000 == 0) {
             ftl_print_stats("STATS");
+        }
+        // Attenuated by half
+        if (stat_host_write_pages % DECAY_PAGES == 0) {
+            for(int i = 0; i < spp->tt_pgs; i++)
+                ssd->wcnt[i] >>= 1;
         }
 
         struct nand_cmd swr;
