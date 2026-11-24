@@ -3,9 +3,10 @@
 
 usage: python3 parse.py ~/femu-results > results.csv
 
-FTL numbers are the measure phase only: snapshot 3 minus snapshot 2 (the
-snapshots are taken after fill, warmup and measure). fio numbers come from
-measure.json.
+FTL numbers are the measure phase only: the last snapshot minus the one
+before it. Normal runs take snapshots after fill, warmup and measure (3 - 2);
+the assign workload takes them before and after its one job (2 - 1). fio
+numbers come from measure.json.
 """
 import json
 import re
@@ -52,10 +53,11 @@ def main(root):
             print(f"# skip {run}: missing femu.log or measure.json", file=sys.stderr)
             continue
         s = snapshots(log)
-        if len(s) < 3:
-            print(f"# skip {run}: {len(s)} snapshots, need 3", file=sys.stderr)
+        need = 2 if run.parts[-2] == "assign" else 3
+        if len(s) < need:
+            print(f"# skip {run}: {len(s)} snapshots, need {need}", file=sys.stderr)
             continue
-        d = {k: s[2][k] - s[1].get(k, 0) for k in s[2]}
+        d = {k: s[-1][k] - s[-2].get(k, 0) for k in s[-1]}
         host = d.get("host_write_pages", 0)
         gc = d.get("gc_write_pages", 0)
         hot = d.get("hot_write_pages", 0)  # absent in baseline -> 0
