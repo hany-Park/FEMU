@@ -1,0 +1,2 @@
+variant=FEMU label=baseline workload=assign rep=1 dist=zipf:0.99 bs=16k foot=45G qd=128 cap=48g run=./run-blackbox-server.sh
+runtime=3600 numjobs=32 fio: --name=test --time_based=1 --runtime=3600 --rw=randwrite --iodepth=128 --numjobs=32 --size=45G --bs=16k --random_distribution=zipf:0.99
